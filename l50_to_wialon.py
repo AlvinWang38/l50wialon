@@ -1,7 +1,7 @@
 import base64
 import json
 import logging
-import os
+from logging import Handler
 import socket
 import struct
 import sys
@@ -14,6 +14,50 @@ import paho.mqtt.client as mqtt
 TOPIC = "adv/+/data"
 HEADER_LEN = 4  # data header length (magic + size + count + reserved)
 DATA_STRUCT = struct.Struct("<LiihbbbBB")
+
+
+class DailyLogFileHandler(Handler):
+    """Simple daily log handler that keeps the active file named with the date."""
+
+    def __init__(self, log_dir: Path):
+        super().__init__()
+        self.log_dir = log_dir
+        self.current_date = ""
+        self.stream = None
+        self._ensure_stream()
+
+    def _log_path_for_date(self, date_str: str) -> Path:
+        return self.log_dir / f"l50wialon-{date_str}.log"
+
+    def _ensure_stream(self) -> None:
+        date_str = datetime.now().strftime("%Y%m%d")
+        if date_str == self.current_date and self.stream:
+            return
+        if self.stream:
+            try:
+                self.stream.close()
+            except Exception:
+                pass
+        self.current_date = date_str
+        self.stream = self._log_path_for_date(date_str).open("a", encoding="utf-8")
+
+    def emit(self, record: logging.LogRecord) -> None:
+        try:
+            self._ensure_stream()
+            msg = self.format(record)
+            self.stream.write(msg + "\n")
+            self.stream.flush()
+        except Exception:
+            self.handleError(record)
+
+    def close(self) -> None:
+        if self.stream:
+            try:
+                self.stream.close()
+            except Exception:
+                pass
+            self.stream = None
+        super().close()
 
 
 def get_version() -> str:
@@ -34,6 +78,35 @@ def load_config(filename: str = "config.json") -> Dict[str, Any]:
     cfg_path = base_dir / filename
     with cfg_path.open("r", encoding="utf-8") as f:
         return json.load(f)
+
+
+def setup_logging() -> Path:
+    base_dir = get_base_dir()
+    log_dir = base_dir / "log"
+    log_dir.mkdir(parents=True, exist_ok=True)
+
+    fmt = "%(asctime)s [%(levelname)s] %(message)s"
+    formatter = logging.Formatter(fmt)
+
+    logger = logging.getLogger()
+    logger.setLevel(logging.DEBUG)
+    logger.handlers.clear()
+
+    console_handler = logging.StreamHandler(sys.stdout)
+    console_handler.setLevel(logging.DEBUG)
+    console_handler.setFormatter(formatter)
+
+    file_handler = DailyLogFileHandler(log_dir)
+    file_handler.setLevel(logging.DEBUG)
+    file_handler.setFormatter(formatter)
+
+    logger.addHandler(console_handler)
+    logger.addHandler(file_handler)
+    logging.captureWarnings(True)
+
+    current_log = log_dir / f"l50wialon-{file_handler.current_date}.log"
+    logger.debug("Logging initialized; writing to %s", current_log)
+    return current_log
 
 
 def extract_device(topic: str) -> str:
@@ -190,12 +263,12 @@ def send_multiple_wialon_records(imei, password, packets, host, port):
         try:
             sock = socket.create_connection((host, port), timeout=10)
             sock.settimeout(5)
-            print("[WIALON-MULTI] TCP connected")
+            logging.info("[WIALON-MULTI] TCP connected")
 
-            print(f"[WIALON-LGN] {login_packet!r}")
+            logging.info("[WIALON-LGN] %r", login_packet)
             sock.sendall(login_packet.encode("ascii"))
             login_resp = _recv_line(sock)
-            print(f"[WIALON-RX-L] {login_resp}")
+            logging.info("[WIALON-RX-L] %s", login_resp)
 
             if not login_resp or login_resp.startswith("#AL#0") or not login_resp.startswith("#AL#1"):
                 logging.warning("Wialon login failed (attempt %d): %s", attempt + 1, login_resp)
@@ -203,10 +276,10 @@ def send_multiple_wialon_records(imei, password, packets, host, port):
 
             for idx, packet in enumerate(packets):
                 for pkt_attempt in range(3):
-                    print(f"[WIALON-PKT-{idx}] {packet.strip()}")
+                    logging.info("[WIALON-PKT-%d] %s", idx, packet.strip())
                     sock.sendall(packet.encode("ascii"))
                     data_resp = _recv_line(sock)
-                    print(f"[WIALON-RX-D] {data_resp}")
+                    logging.info("[WIALON-RX-D] %s", data_resp)
 
                     if data_resp and data_resp.startswith("#AD#1"):
                         break
@@ -222,7 +295,7 @@ def send_multiple_wialon_records(imei, password, packets, host, port):
                         logging.warning("Giving up on packet index %d after retries", idx)
                 # continue to next packet regardless of ack result
 
-            print("[WIALON-MULTI] session complete, closing socket")
+            logging.info("[WIALON-MULTI] session complete, closing socket")
             return
         except Exception as exc:  # pylint: disable=broad-except
             logging.warning("Wialon multi-send error (attempt %d): %s", attempt + 1, exc)
@@ -265,15 +338,15 @@ def send_one_wialon_cycle(imei, password, packet, host, port, debug_enabled=Fals
         except socket.timeout:
             logging.warning("Wialon login timeout")
 
-        print(f"[WIALON-LGN] {login_packet!r}")
-        print(f"[WIALON-RX-L] {login_resp}")
+        logging.info("[WIALON-LGN] %r", login_packet)
+        logging.info("[WIALON-RX-L] %s", login_resp)
 
         if not login_resp or not login_resp.startswith("#AL#1"):
             logging.warning("Wialon login failed or rejected: %s", login_resp)
             return
 
         # send data packet
-        print(f"[WIALON-PKT] {packet.strip()}")
+        logging.info("[WIALON-PKT] %s", packet.strip())
         sock.sendall(packet.encode("ascii"))
 
         data_resp = None
@@ -283,7 +356,7 @@ def send_one_wialon_cycle(imei, password, packet, host, port, debug_enabled=Fals
                 data_resp = data_resp_bytes.decode("ascii", errors="ignore").strip()
         except socket.timeout:
             logging.warning("Wialon data ack timeout")
-        print(f"[WIALON-RX-D] {data_resp}")
+        logging.info("[WIALON-RX-D] %s", data_resp)
     except Exception as exc:  # pylint: disable=broad-except
         logging.warning("Wialon send error: %s", exc)
     finally:
@@ -315,12 +388,12 @@ def parse_leo_l50_data_message(raw_msg, topic_device, debug_enabled=False):
         return []
 
     if debug_enabled:
-        print("==== LEO-L50 DATA DEBUG ====")
-        print(f"[DEBUG] device={topic_device}")
-        print(f"[DEBUG] raw JSON msg={msg}")
-        print(f"[DEBUG] payload b64={payload_b64}")
-        print(f"[DEBUG] payload length={len(payload_bytes)}")
-        print(f"[DEBUG] payload hex={payload_bytes.hex()}")
+        logging.debug("==== LEO-L50 DATA DEBUG ====")
+        logging.debug("[DEBUG] device=%s", topic_device)
+        logging.debug("[DEBUG] raw JSON msg=%s", msg)
+        logging.debug("[DEBUG] payload b64=%s", payload_b64)
+        logging.debug("[DEBUG] payload length=%d", len(payload_bytes))
+        logging.debug("[DEBUG] payload hex=%s", payload_bytes.hex())
 
     header_len = HEADER_LEN
     if len(payload_bytes) < header_len:
@@ -333,8 +406,8 @@ def parse_leo_l50_data_message(raw_msg, topic_device, debug_enabled=False):
     count = header[2]
 
     if debug_enabled:
-        print(f"[DEBUG] header bytes={list(header)}")
-        print(f"[DEBUG] header: magic=0x{magic:02X}, size={size}, count={count}")
+        logging.debug("[DEBUG] header bytes=%s", list(header))
+        logging.debug("[DEBUG] header: magic=0x%02X, size=%d, count=%d", magic, size, count)
 
     if magic != 0xA5:
         logging.warning("unexpected magic byte: 0x%02X", magic)
@@ -375,11 +448,19 @@ def parse_leo_l50_data_message(raw_msg, topic_device, debug_enabled=False):
         ) = DATA_STRUCT.unpack(log_subary)
 
         if debug_enabled:
-            print(
-                f"[DEBUG] record[{index}] raw: "
-                f"ts={log_ts}, la_raw={la_raw}, lg_raw={lg_raw}, tmp_raw={tmp_raw}, "
-                f"tiltx={tiltx}, tilty={tilty}, tiltz={tiltz}, "
-                f"corev_raw={corev_raw}, liionv_raw={liionv_raw}"
+            logging.debug(
+                "[DEBUG] record[%d] raw: ts=%s, la_raw=%s, lg_raw=%s, tmp_raw=%s, "
+                "tiltx=%s, tilty=%s, tiltz=%s, corev_raw=%s, liionv_raw=%s",
+                index,
+                log_ts,
+                la_raw,
+                lg_raw,
+                tmp_raw,
+                tiltx,
+                tilty,
+                tiltz,
+                corev_raw,
+                liionv_raw,
             )
 
         la = la_raw * 0.000001
@@ -389,9 +470,14 @@ def parse_leo_l50_data_message(raw_msg, topic_device, debug_enabled=False):
         liionv = liionv_raw * 0.1
 
         if debug_enabled:
-            print(
-                f"[DEBUG] record[{index}] scaled: "
-                f"la={la}, lg={lg}, tmp={tmp}, corev={corev}, liionv={liionv}"
+            logging.debug(
+                "[DEBUG] record[%d] scaled: la=%s, lg=%s, tmp=%s, corev=%s, liionv=%s",
+                index,
+                la,
+                lg,
+                tmp,
+                corev,
+                liionv,
             )
 
         records.append(
@@ -475,20 +561,20 @@ def on_message(client: mqtt.Client, userdata: Dict[str, Any], msg: mqtt.MQTTMess
         if ok and wialon_host and wialon_port:
             packet = build_wialon_extended_d_packet(output, dev_imei)
             if debug_enabled:
-                print("[WIALON-PKT]", packet.strip())
+                logging.debug("[WIALON-PKT] %s", packet.strip())
             packets.append(packet)
 
         if print_json:
-            print(json.dumps(output))
+            logging.info("%s", json.dumps(output))
 
     if ok:
-        print(f"[WIALON-FWD] imei={dev_imei}, password={pwd}")
+        logging.info("[WIALON-FWD] imei=%s, password=%s", dev_imei, pwd)
         if wialon_host and wialon_port and packets:
             send_multiple_wialon_records(dev_imei, pwd, packets, wialon_host, wialon_port)
         elif not (wialon_host and wialon_port):
             logging.warning("Wialon host/port missing; skipping send")
     else:
-        print(f"[WIALON-SKIP] imei={imei} not in forwarding list or disabled")
+        logging.info("[WIALON-SKIP] imei=%s not in forwarding list or disabled", imei)
 
 
 def configure_client(config: Dict[str, Any]) -> mqtt.Client:
@@ -518,8 +604,8 @@ def configure_client(config: Dict[str, Any]) -> mqtt.Client:
 
 
 def main() -> None:
-    print(f"L50-Wialon Forwarder version: v{get_version()}")
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+    setup_logging()
+    logging.info("L50-Wialon Forwarder version: v%s", get_version())
 
     config = load_config()
     wialon_cfg = config.get("wialon", {})
