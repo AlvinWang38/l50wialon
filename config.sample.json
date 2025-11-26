@@ -1,0 +1,36 @@
+{
+  "mqtt": {
+    "broker_ip": "220.130.157.88",
+    "port": 1883,
+    "username": "leol",
+    "password": "p@ssw0rd",
+    "tls_enabled": false,
+    "tls_ca": "",
+    "tls_client_cert": "",
+    "tls_client_key": ""
+  },
+  "output": { "print_json": true },
+  "debug": true,
+  "wialon": {
+    "host": "nl2.gpsgsm.org",
+    "port": 20332,
+    "default_password": "NA",
+    "devices": [
+      {
+        "imei": "353500725508404",
+        "enabled": true,
+        "password": ""
+      },
+      {
+        "imei": "353500725105474",
+        "enabled": true,
+        "password": "password"
+      },
+      {
+        "imei": "353500725489142",
+        "enabled": false,
+        "password": ""
+      }
+    ]
+  }
+}

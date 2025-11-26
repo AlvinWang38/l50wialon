@@ -1,0 +1,18 @@
+# Python cache
+__pycache__/\n*.py[cod]
+
+# Virtual env
+.venv/\nenv/\nvenv/
+
+# PyInstaller
+build/\ndist/\n*.spec
+
+# Editor
+.vscode/\n.idea/
+
+# Logs
+*.log
+
+# Local config (but keep a sample)
+config.json
+
