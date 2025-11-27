@@ -60,17 +60,23 @@ class DailyLogFileHandler(Handler):
         super().close()
 
 
-def get_version() -> str:
-    ver_file = Path(__file__).resolve().parent / "version.txt"
-    if ver_file.exists():
-        return ver_file.read_text().strip()
-    return "unknown"
-
-
 def get_base_dir() -> Path:
     if getattr(sys, "frozen", False):
         return Path(sys.executable).resolve().parent
     return Path(__file__).resolve().parent
+
+
+def get_version() -> str:
+    """
+    版本號從 base_dir/version.txt 讀取。
+    - 對 .py 直跑：base_dir = 檔案所在資料夾
+    - 對 PyInstaller exe：base_dir = exe 所在資料夾
+    只要 version.txt 放同層即可避免 vunknown。
+    """
+    ver_file = get_base_dir() / "version.txt"
+    if ver_file.exists():
+        return ver_file.read_text(encoding="utf-8").strip()
+    return "unknown"
 
 
 def load_config(filename: str = "config.json") -> Dict[str, Any]:
@@ -92,10 +98,12 @@ def setup_logging() -> Path:
     logger.setLevel(logging.DEBUG)
     logger.handlers.clear()
 
+    # console 只顯示 INFO 以上，避免太吵
     console_handler = logging.StreamHandler(sys.stdout)
-    console_handler.setLevel(logging.DEBUG)
+    console_handler.setLevel(logging.INFO)
     console_handler.setFormatter(formatter)
 
+    # 檔案保留完整 DEBUG 訊息
     file_handler = DailyLogFileHandler(log_dir)
     file_handler.setLevel(logging.DEBUG)
     file_handler.setFormatter(formatter)
@@ -221,6 +229,7 @@ def build_wialon_extended_d_packet(record, imei):
     )
 
     return f"#D#{body}\r\n"
+
 
 def _recv_line(sock):
     """
